@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { fetchScenario, submitAction } from '../services/api.js';
+import { actionsMatch } from '../utils/actionIds.js';
 import PokerTable from '../components/PokerTable.jsx';
 import ActionButtons from '../components/ActionButtons.jsx';
 import FeedbackPanel from '../components/FeedbackPanel.jsx';
@@ -25,7 +26,10 @@ function getActions(scenario) {
   ];
 }
 
-export default function TrainerPage() {
+/**
+ * @param {{ onHandGraded?: (wasCorrect: boolean) => void }} props
+ */
+export default function TrainerPage({ onHandGraded }) {
   const [scenario, setScenario] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
@@ -64,6 +68,9 @@ export default function TrainerPage() {
         ...data,
         userAction: actionId,
       });
+      const rec = data.recommended_action;
+      const wasCorrect = actionsMatch(actionId, rec);
+      onHandGraded?.(wasCorrect);
     } catch (e) {
       setFeedback({
         recommended_action: '—',
@@ -71,6 +78,7 @@ export default function TrainerPage() {
         concept: '—',
         userAction: actionId,
       });
+      onHandGraded?.(false);
     } finally {
       setSubmitting(false);
     }
@@ -80,54 +88,66 @@ export default function TrainerPage() {
   const showTable = !loading && !loadError && scenario;
 
   return (
-    <div className="min-h-screen bg-slate-100 dark:bg-slate-900 text-slate-900 dark:text-slate-100">
-      <header className="bg-felt text-white py-4 px-4 text-center shadow-md">
-        <h1 className="font-display text-2xl font-bold tracking-wide">Poker Strategy Trainer</h1>
-        <p className="text-sm text-white/80 mt-1">Choose your action, then see the explanation.</p>
-      </header>
+    <main className="flex-1 max-w-3xl w-full mx-auto px-4 py-8 sm:py-10 space-y-8">
+      <div className="text-center sm:text-left">
+        <h1 className="font-display text-2xl sm:text-3xl font-bold text-white tracking-tight">
+          Practice
+        </h1>
+        <p className="text-slate-400 mt-1 text-sm sm:text-base">
+          Pick the line you would take at the table. Feedback appears after you commit — like a tactics
+          puzzle with the solution revealed.
+        </p>
+      </div>
 
-      <main className="max-w-2xl mx-auto px-4 py-6 space-y-6">
-        <ScenarioLoader onLoad={loadScenario} loading={loading} error={loadError}>
-          {showTable && (
-            <>
-              <section aria-label="Poker table">
-                <PokerTable
-                  board={scenario.board}
-                  heroHand={scenario.hero_hand}
-                  pot={scenario.pot}
-                  stack={scenario.stack}
-                  position={scenario.position}
-                  street={scenario.street}
-                />
+      <aside
+        className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3 text-sm text-slate-300"
+        aria-label="Practice tip"
+      >
+        <span className="font-semibold text-emerald-400/90">Tip:</span>{' '}
+        Name the villain&apos;s likely range before you click. Then check whether your action matches the
+        recommended concept.
+      </aside>
+
+      <ScenarioLoader loading={loading} error={loadError}>
+        {showTable && (
+          <>
+            <section aria-label="Poker table" className="shadow-glow rounded-3xl">
+              <PokerTable
+                board={scenario.board}
+                heroHand={scenario.hero_hand}
+                pot={scenario.pot}
+                stack={scenario.stack}
+                position={scenario.position}
+                street={scenario.street}
+              />
+            </section>
+
+            <section aria-label="Actions" className="flex flex-col items-center gap-4">
+              <ActionButtons
+                disabled={submitting}
+                actions={actions}
+                onAction={handleAction}
+              />
+            </section>
+
+            {feedback && (
+              <section aria-label="Feedback" className="space-y-3">
+                <h2 className="text-lg font-semibold text-slate-200">Coach feedback</h2>
+                <FeedbackPanel feedback={feedback} />
+                <div className="flex justify-center pt-1">
+                  <button
+                    type="button"
+                    onClick={loadScenario}
+                    className="px-6 py-3 rounded-xl font-semibold bg-emerald-500 text-brand-ink hover:bg-emerald-400 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 focus-visible:ring-offset-2 focus-visible:ring-offset-brand-ink"
+                  >
+                    Next puzzle
+                  </button>
+                </div>
               </section>
-
-              <section aria-label="Actions" className="flex flex-col items-center gap-4">
-                <ActionButtons
-                  disabled={submitting}
-                  actions={actions}
-                  onAction={handleAction}
-                />
-              </section>
-
-              {feedback && (
-                <section aria-label="Feedback" className="space-y-2">
-                  <h2 className="text-lg font-semibold text-slate-700 dark:text-slate-300">Feedback</h2>
-                  <FeedbackPanel feedback={feedback} />
-                  <div className="flex justify-center pt-2">
-                    <button
-                      type="button"
-                      onClick={loadScenario}
-                      className="px-5 py-2.5 rounded-lg font-semibold bg-felt hover:bg-feltDark text-white border-2 border-feltDark transition-colors"
-                    >
-                      Next hand
-                    </button>
-                  </div>
-                </section>
-              )}
-            </>
-          )}
-        </ScenarioLoader>
-      </main>
-    </div>
+            )}
+          </>
+        )}
+      </ScenarioLoader>
+    </main>
   );
 }

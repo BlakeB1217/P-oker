@@ -1,12 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
-import { fetchScenario, submitAction } from '../services/api.js';
-import { actionsMatch } from '../utils/actionIds.js';
+import { useEffect, useState } from 'react';
 import PokerTable from '../components/PokerTable.jsx';
 import ActionButtons from '../components/ActionButtons.jsx';
-import FeedbackPanel from '../components/FeedbackPanel.jsx';
-import ScenarioLoader from '../components/ScenarioLoader.jsx';
 
 const STREETS = ['preflop', 'flop', 'turn', 'river'];
+const OPPONENT_STYLES = ['aggressive', 'moderate', 'tight'];
 const BOT_ACTIONS = [
   { id: 'fold', label: 'Fold' },
   { id: 'call', label: 'Call' },
@@ -16,26 +13,6 @@ const BOT_ACTIONS = [
   { id: 'bet_4', label: '$4' },
   { id: 'bet_5', label: '$5' },
 ];
-
-/** Derive available actions from scenario (facing_action, street). */
-function getActions(scenario) {
-  if (!scenario) return [];
-  const facing = (scenario.facing_action || '').toLowerCase();
-  const hasBet = /bet|raise|open/.test(facing);
-  if (hasBet) {
-    return [
-      { id: 'fold', label: 'Fold' },
-      { id: 'call', label: 'Call' },
-      { id: 'bet_small', label: 'Raise' },
-      { id: 'all_in', label: 'All in' },
-    ];
-  }
-  return [
-    { id: 'check', label: 'Check' },
-    { id: 'bet_small', label: 'Bet' },
-    { id: 'bet_pot', label: 'Bet pot' },
-  ];
-}
 
 function buildDeck() {
   const ranks = '23456789TJQKA';
@@ -59,13 +36,20 @@ function getBoardForStreet(fullBoard, streetIndex) {
   return fullBoard.slice(0, 5);
 }
 
-function createBotHand() {
+function formatStyleLabel(style) {
+  if (style === 'aggressive') return 'Aggro';
+  if (style === 'moderate') return 'Moderate';
+  return 'Tight';
+}
+
+function createBotHand(startingStack = 100, opponentStyle = 'aggressive') {
   const deck = shuffle(buildDeck());
   const draw = () => deck.pop();
+  const smallBlind = Math.min(1, startingStack);
+  const userStackAfterBlind = startingStack - smallBlind;
 
   const hero = [draw(), draw()];
-  const botAggro = [draw(), draw()];
-  const botTight = [draw(), draw()];
+  const botHole = [draw(), draw()];
 
   draw(); // burn before flop
   const flop = [draw(), draw(), draw()];
@@ -78,16 +62,17 @@ function createBotHand() {
 
   return {
     hero,
-    bots: [
-      { name: 'Bot Aggro', style: 'aggressive', hole: botAggro, folded: false },
-      { name: 'Bot Tight', style: 'tight', hole: botTight, folded: false },
-    ],
+    bots: [{ name: `Bot ${formatStyleLabel(opponentStyle)}`, style: opponentStyle, hole: botHole, folded: false }],
     fullBoard,
     streetIndex: 0,
-    pot: 3, // $1 small blind + $2 big blind baseline
-    log: ['New hand started. User posts $1 SB. Bot Aggro posts $2 BB.'],
+    pot: smallBlind + 2, // User posts SB, Bot Aggro posts BB
+    startingStack,
+    userStack: userStackAfterBlind,
+    userCommitted: smallBlind,
+    log: [`New hand started. User posts $${smallBlind} SB. Bot ${formatStyleLabel(opponentStyle)} posts $2 BB.`],
     handOver: false,
     winner: null,
+    settled: false,
   };
 }
 
@@ -107,6 +92,14 @@ function chooseBotAction(style) {
     if (roll < 0.88) return 'bet_4';
     return 'bet_5';
   }
+  if (style === 'moderate') {
+    if (roll < 0.18) return 'fold';
+    if (roll < 0.58) return 'call';
+    if (roll < 0.74) return 'bet_1';
+    if (roll < 0.87) return 'bet_2';
+    if (roll < 0.96) return 'bet_3';
+    return 'bet_4';
+  }
   // Tight profile folds/calls more and chooses smaller bets
   if (roll < 0.3) return 'fold';
   if (roll < 0.75) return 'call';
@@ -122,70 +115,18 @@ function actionLabel(actionId) {
   return actionId;
 }
 
-/**
- * @param {{ onHandGraded?: (wasCorrect: boolean) => void }} props
- */
-export default function TrainerPage({ onHandGraded }) {
-  const [mode, setMode] = useState('bot-table');
-  const [scenario, setScenario] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState(null);
-  const [feedback, setFeedback] = useState(null);
-  const [submitting, setSubmitting] = useState(false);
-  const [botHand, setBotHand] = useState(createBotHand);
+function resolveShowdownWinner(bots) {
+  const contenders = ['User', ...bots.filter((bot) => !bot.folded).map((bot) => bot.name)];
+  return contenders[Math.floor(Math.random() * contenders.length)];
+}
 
-  const loadScenario = useCallback(async () => {
-    setLoadError(null);
-    setLoading(true);
-    setFeedback(null);
-    try {
-      const data = await fetchScenario();
-      setScenario(data);
-    } catch (e) {
-      setLoadError(e.message || 'Failed to load scenario');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (mode === 'trainer') {
-      loadScenario();
-    }
-  }, [loadScenario, mode]);
-
-  async function handleAction(actionId) {
-    if (!scenario || submitting) return;
-    setSubmitting(true);
-    setFeedback(null);
-    try {
-      const data = await submitAction({
-        handState: scenario,
-        userAction: actionId,
-        scenarioId: scenario.scenario_id ?? null,
-      });
-      setFeedback({
-        ...data,
-        userAction: actionId,
-      });
-      const rec = data.recommended_action;
-      const wasCorrect = actionsMatch(actionId, rec);
-      onHandGraded?.(wasCorrect);
-    } catch (e) {
-      setFeedback({
-        recommended_action: '—',
-        reasoning: e.message || 'Failed to get feedback.',
-        concept: '—',
-        userAction: actionId,
-      });
-      onHandGraded?.(false);
-    } finally {
-      setSubmitting(false);
-    }
-  }
+export default function TrainerPage() {
+  const [opponentStyle, setOpponentStyle] = useState('aggressive');
+  const [userBankroll, setUserBankroll] = useState(100);
+  const [botHand, setBotHand] = useState(() => createBotHand(100, 'aggressive'));
 
   function startNextBotHand() {
-    setBotHand(createBotHand());
+    setBotHand(createBotHand(userBankroll, opponentStyle));
   }
 
   function runBotTableAction(actionId) {
@@ -201,11 +142,19 @@ export default function TrainerPage({ onHandGraded }) {
       if (actionId === 'fold') {
         next.handOver = true;
         next.winner = 'Bots';
+        next.settled = false;
         next.log.push('User folds. Bots win the pot.');
         return next;
       }
 
-      next.pot += parseAmount(actionId);
+      const requestedAmount = parseAmount(actionId);
+      const userPutIn = Math.min(requestedAmount, next.userStack);
+      next.userStack -= userPutIn;
+      next.userCommitted += userPutIn;
+      next.pot += userPutIn;
+      if (requestedAmount > userPutIn) {
+        next.log.push(`User can only put in $${userPutIn}.`);
+      }
       next.log.push(`User ${actionLabel(actionId)}.`);
 
       for (const bot of next.bots) {
@@ -224,6 +173,7 @@ export default function TrainerPage({ onHandGraded }) {
       if (aliveBots === 0) {
         next.handOver = true;
         next.winner = 'User';
+        next.settled = false;
         next.log.push('All bots folded. User wins the pot.');
         return next;
       }
@@ -233,143 +183,121 @@ export default function TrainerPage({ onHandGraded }) {
         next.log.push(`Street advances to ${STREETS[next.streetIndex]}.`);
       } else {
         next.handOver = true;
-        next.winner = 'Showdown';
-        next.log.push('River action complete. Showdown.');
+        next.winner = resolveShowdownWinner(next.bots);
+        next.settled = false;
+        next.log.push(`River action complete. Showdown winner: ${next.winner}.`);
       }
 
       return next;
     });
   }
 
-  const actions = getActions(scenario);
-  const showTable = !loading && !loadError && scenario;
+  useEffect(() => {
+    if (!botHand.handOver || botHand.settled) return;
+
+    const userWon = botHand.winner === 'User';
+    const payout = userWon ? botHand.pot : 0;
+    const updatedStack = botHand.userStack + payout;
+    const resultLine = userWon
+      ? `User collects $${botHand.pot.toFixed(2)} pot.`
+      : `User loses $${botHand.userCommitted.toFixed(2)} this hand.`;
+
+    setUserBankroll(updatedStack);
+    setBotHand((prev) => ({
+      ...prev,
+      userStack: updatedStack,
+      settled: true,
+      log: [...prev.log, resultLine],
+    }));
+  }, [botHand]);
   const visibleBoard = getBoardForStreet(botHand.fullBoard, botHand.streetIndex);
 
   return (
     <main className="flex-1 max-w-3xl w-full mx-auto px-4 py-8 sm:py-10 space-y-8">
       <div className="text-center sm:text-left">
         <h1 className="font-display text-2xl sm:text-3xl font-bold text-white tracking-tight">
-          Practice
+          Bot Table
         </h1>
         <p className="text-slate-400 mt-1 text-sm sm:text-base">
-          Click into trainer mode for puzzles, or bot table mode to play through live hands with simple
-          betting controls.
+          Play heads-up style limit hands versus selectable bot profiles with simple betting controls.
         </p>
       </div>
 
-      <section className="flex flex-wrap gap-2" aria-label="Mode selector">
-        <button
-          type="button"
-          onClick={() => setMode('bot-table')}
-          className={`px-4 py-2 rounded-lg border text-sm font-semibold transition-colors ${
-            mode === 'bot-table'
-              ? 'bg-emerald-500 text-brand-ink border-emerald-400'
-              : 'bg-slate-900 text-slate-300 border-slate-700 hover:bg-slate-800'
-          }`}
-        >
-          Bot table mode
-        </button>
-        <button
-          type="button"
-          onClick={() => setMode('trainer')}
-          className={`px-4 py-2 rounded-lg border text-sm font-semibold transition-colors ${
-            mode === 'trainer'
-              ? 'bg-emerald-500 text-brand-ink border-emerald-400'
-              : 'bg-slate-900 text-slate-300 border-slate-700 hover:bg-slate-800'
-          }`}
-        >
-          Trainer mode
-        </button>
-      </section>
+      <>
+        <section className="flex flex-wrap items-center gap-2" aria-label="Opponent selector">
+          <span className="text-sm text-slate-300 mr-1">Opponent:</span>
+          {OPPONENT_STYLES.map((style) => (
+            <button
+              key={style}
+              type="button"
+              onClick={() => {
+                setOpponentStyle(style);
+                setBotHand(createBotHand(userBankroll, style));
+              }}
+              className={`px-3 py-1.5 rounded-lg border text-sm font-semibold transition-colors ${
+                opponentStyle === style
+                  ? 'bg-emerald-500 text-brand-ink border-emerald-400'
+                  : 'bg-slate-900 text-slate-300 border-slate-700 hover:bg-slate-800'
+              }`}
+            >
+              {formatStyleLabel(style)}
+            </button>
+          ))}
+        </section>
 
-      {mode === 'bot-table' && (
-        <>
-          <section aria-label="Poker table" className="shadow-glow rounded-3xl">
-            <PokerTable
-              board={visibleBoard}
-              heroHand={botHand.hero}
-              pot={botHand.pot}
-              stack={100}
-              position="SB/Button"
-              street={STREETS[botHand.streetIndex]}
-            />
-          </section>
+        <section aria-label="Poker table" className="shadow-glow rounded-3xl">
+          <PokerTable
+            board={visibleBoard}
+            heroHand={botHand.hero}
+            pot={botHand.pot}
+            stack={botHand.userStack}
+            position="SB/Button"
+            street={STREETS[botHand.streetIndex]}
+          />
+        </section>
 
-          <section aria-label="Actions" className="flex flex-col items-center gap-4">
-            <ActionButtons disabled={botHand.handOver} actions={BOT_ACTIONS} onAction={runBotTableAction} />
-            {botHand.handOver && (
-              <button
-                type="button"
-                onClick={startNextBotHand}
-                className="px-6 py-3 rounded-xl font-semibold bg-emerald-500 text-brand-ink hover:bg-emerald-400 transition-colors"
-              >
-                Deal next hand
-              </button>
-            )}
-          </section>
+        <section aria-label="Actions" className="flex flex-col items-center gap-4">
+          <p className="text-sm text-slate-300">Bankroll: ${userBankroll.toFixed(2)}</p>
+          <ActionButtons
+            disabled={botHand.handOver || botHand.userStack <= 0}
+            actions={BOT_ACTIONS}
+            onAction={runBotTableAction}
+          />
+          {botHand.handOver && (
+            <button
+              type="button"
+              onClick={startNextBotHand}
+              className="px-6 py-3 rounded-xl font-semibold bg-emerald-500 text-brand-ink hover:bg-emerald-400 transition-colors"
+            >
+              Deal next hand
+            </button>
+          )}
+          {botHand.userStack <= 0 && !botHand.handOver && (
+            <button
+              type="button"
+              onClick={() => {
+                setUserBankroll(100);
+                setBotHand(createBotHand(100, opponentStyle));
+              }}
+              className="px-6 py-3 rounded-xl font-semibold bg-slate-600 text-white hover:bg-slate-500 transition-colors"
+            >
+              Reset bankroll
+            </button>
+          )}
+        </section>
 
-          <section className="rounded-xl border border-slate-700 bg-slate-900/70 p-4" aria-label="Hand action log">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300 mb-2">Hand log</h2>
-            <div className="space-y-1 text-sm text-slate-300 max-h-56 overflow-auto">
-              {botHand.log.map((line, idx) => (
-                <p key={`${line}-${idx}`}>{line}</p>
-              ))}
-            </div>
-            {botHand.handOver && (
-              <p className="mt-3 text-emerald-300 font-medium">Result: {botHand.winner}</p>
-            )}
-          </section>
-        </>
-      )}
-
-      {mode === 'trainer' && (
-        <>
-          <aside
-            className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3 text-sm text-slate-300"
-            aria-label="Practice tip"
-          >
-            <span className="font-semibold text-emerald-400/90">Tip:</span> Name the villain&apos;s likely
-            range before you click. Then check whether your action matches the recommended concept.
-          </aside>
-
-          <ScenarioLoader loading={loading} error={loadError}>
-            {showTable && (
-              <>
-                <section aria-label="Poker table" className="shadow-glow rounded-3xl">
-                  <PokerTable
-                    board={scenario.board}
-                    heroHand={scenario.hero_hand}
-                    pot={scenario.pot}
-                    stack={scenario.stack}
-                    position={scenario.position}
-                    street={scenario.street}
-                  />
-                </section>
-
-                <section aria-label="Actions" className="flex flex-col items-center gap-4">
-                  <ActionButtons disabled={submitting} actions={actions} onAction={handleAction} />
-                </section>
-
-                {feedback && (
-                  <section aria-label="Feedback" className="space-y-3">
-                    <h2 className="text-lg font-semibold text-slate-200">Coach feedback</h2>
-                    <FeedbackPanel feedback={feedback} />
-                    <div className="flex justify-center pt-1">
-                      <button
-                        type="button"
-                        onClick={loadScenario}
-                        className="px-6 py-3 rounded-xl font-semibold bg-emerald-500 text-brand-ink hover:bg-emerald-400 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 focus-visible:ring-offset-2 focus-visible:ring-offset-brand-ink"
-                      >
-                        Next puzzle
-                      </button>
-                    </div>
-                  </section>
-                )}
-              </>
-            )}
-          </ScenarioLoader>
-        </>
-      )}
+        <section className="rounded-xl border border-slate-700 bg-slate-900/70 p-4" aria-label="Hand action log">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300 mb-2">Hand log</h2>
+          <div className="space-y-1 text-sm text-slate-300 max-h-56 overflow-auto">
+            {botHand.log.map((line, idx) => (
+              <p key={`${line}-${idx}`}>{line}</p>
+            ))}
+          </div>
+          {botHand.handOver && (
+            <p className="mt-3 text-emerald-300 font-medium">Result: {botHand.winner}</p>
+          )}
+        </section>
+      </>
     </main>
   );
 }

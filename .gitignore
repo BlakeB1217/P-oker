@@ -213,3 +213,6 @@ dist/
 *.local
 .vite/
 
+# Local decision history
+backend/decisions.jsonl
+

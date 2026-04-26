@@ -1,25 +1,55 @@
-from supabase import create_client, Client
-from config import SUPABASE_URL, SUPABASE_ANON_KEY
+"""Local file-based decision storage (replaces Supabase)."""
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+import json
+import os
+from datetime import datetime, timezone
 
-def get_hands():
-    hands = (
-        supabase.table("hands")
-        .select("id, session_id, user_id, variant, format, hero_cards, board_flop, board_turn, board_river")
-        .limit(10)
-        .execute()
-    )
-    print(hands.data)
+DECISIONS_FILE = os.path.join(os.path.dirname(__file__), "decisions.jsonl")
 
 
-def get_random_hand():
-    """Call the Supabase RPC `get_random_hand` (see SQL in docs). Returns one row dict or None."""
-    r = supabase.rpc("get_random_hand").execute()
-    if r.data and len(r.data) > 0:
-        return r.data[0]
-    return None
+def save_decision(street: str, user_action: str, recommended_action: str,
+                  correct: bool, pot: float, to_call: float,
+                  hand_strength: str, style: str) -> None:
+    row = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "street": street,
+        "user_action": user_action,
+        "recommended_action": recommended_action,
+        "correct": correct,
+        "pot": round(pot, 2),
+        "to_call": round(to_call, 2),
+        "hand_strength": hand_strength,
+        "style": style,
+    }
+    try:
+        with open(DECISIONS_FILE, "a") as f:
+            f.write(json.dumps(row) + "\n")
+    except Exception as e:
+        print(f"[storage] save_decision failed: {e}")
 
 
-if __name__ == "__main__":
-    print(get_random_hand())
+def clear_decisions() -> None:
+    try:
+        if os.path.exists(DECISIONS_FILE):
+            os.remove(DECISIONS_FILE)
+    except Exception as e:
+        print(f"[storage] clear_decisions failed: {e}")
+
+
+def get_recent_decisions(limit: int = 100) -> list[dict]:
+    if not os.path.exists(DECISIONS_FILE):
+        return []
+    try:
+        with open(DECISIONS_FILE) as f:
+            lines = f.readlines()
+        rows = []
+        for line in reversed(lines):
+            line = line.strip()
+            if line:
+                rows.append(json.loads(line))
+            if len(rows) >= limit:
+                break
+        return rows
+    except Exception as e:
+        print(f"[storage] get_recent_decisions failed: {e}")
+        return []

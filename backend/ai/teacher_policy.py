@@ -76,27 +76,48 @@ def _preflop_strength_bucket(hole_cards: List[str]) -> str:
 
 
 def _postflop_strength_bucket(hole_cards: List[str], board_cards: List[str]) -> str:
-    """Cheap heuristic: pair/trips/two-pair proxy plus overcard logic."""
-    ranks = [_rank(c) for c in hole_cards + board_cards]
-    counts: Dict[str, int] = {}
-    for r in ranks:
-        counts[r] = counts.get(r, 0) + 1
+    """Evaluate actual best 5-card hand rank for accurate strength bucketing."""
+    from itertools import combinations as _combos
 
-    max_count = max(counts.values())
-    pair_count = sum(1 for v in counts.values() if v >= 2)
+    _RANKS = "23456789TJQKA"
 
-    if max_count >= 3:
-        return "very_strong"
-    if pair_count >= 2:
-        return "strong"
-    if pair_count == 1:
-        return "medium"
+    def _r(c: str) -> int:
+        return _RANKS.index(c[0])
 
-    board_high = max((RANK_TO_VALUE[_rank(c)] for c in board_cards), default=0)
+    def _eval5(cards) -> int:
+        rs = sorted([_r(c) for c in cards], reverse=True)
+        ss = [c[1] for c in cards]
+        ct: Dict[int, int] = {}
+        for r in rs:
+            ct[r] = ct.get(r, 0) + 1
+        gs = sorted(ct.items(), key=lambda x: (x[1], x[0]), reverse=True)
+        fl = len(set(ss)) == 1
+        st = rs[0] - rs[4] == 4 and len(set(rs)) == 5
+        if not st and rs == [12, 3, 2, 1, 0]:
+            st = True
+        if fl and st: return 8
+        if gs[0][1] == 4: return 7
+        if gs[0][1] == 3 and gs[1][1] == 2: return 6
+        if fl: return 5
+        if st: return 4
+        if gs[0][1] == 3: return 3
+        if gs[0][1] == 2 and gs[1][1] == 2: return 2
+        if gs[0][1] == 2: return 1
+        return 0
+
+    all_cards = hole_cards + board_cards
+    best_rank = max(_eval5(list(c)) for c in _combos(all_cards, 5))
+
+    if best_rank >= 3:
+        return "very_strong"  # trips, straight, flush, full house, quads, str flush
+    if best_rank == 2:
+        return "strong"       # two pair
+    if best_rank == 1:
+        return "medium"       # one pair
+
+    board_high = max(RANK_TO_VALUE[_rank(c)] for c in board_cards)
     hole_high = max(RANK_TO_VALUE[_rank(c)] for c in hole_cards)
-    if hole_high > board_high:
-        return "draw_or_overcards"
-    return "weak"
+    return "draw_or_overcards" if hole_high > board_high else "weak"
 
 
 def _base_probs_for_bucket(bucket: str) -> Dict[str, float]:
@@ -178,7 +199,16 @@ def teacher_policy(context: HandContext) -> Dict[str, object]:
     probs = _apply_style_adjustment(probs, context.style)
     probs = _apply_price_adjustment(probs, context.to_call, context.pot_size)
     probs = _normalize(probs)
-    action = sample_action(probs)
+    bet_total = sum(v for k, v in probs.items() if k.startswith("bet_"))
+    call_prob = probs.get("call", 0.0)
+    fold_prob = probs.get("fold", 0.0)
+
+    if bet_total >= call_prob and bet_total >= fold_prob:
+        action = max((k for k in probs if k.startswith("bet_")), key=probs.get)
+    elif call_prob >= fold_prob:
+        action = "call"
+    else:
+        action = "fold"
 
     return {
         "action": action,

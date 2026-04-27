@@ -1,4 +1,4 @@
-"""Local file-based decision storage (replaces Supabase)."""
+"""Local file-based decision storage."""
 
 import json
 import os
@@ -9,7 +9,8 @@ DECISIONS_FILE = os.path.join(os.path.dirname(__file__), "decisions.jsonl")
 
 def save_decision(street: str, user_action: str, recommended_action: str,
                   correct: bool, pot: float, to_call: float,
-                  hand_strength: str, style: str) -> None:
+                  hand_strength: str, style: str,
+                  hole_cards: list, board: list) -> None:
     row = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "street": street,
@@ -20,6 +21,8 @@ def save_decision(street: str, user_action: str, recommended_action: str,
         "to_call": round(to_call, 2),
         "hand_strength": hand_strength,
         "style": style,
+        "hole_cards": hole_cards,
+        "board": board,
     }
     try:
         with open(DECISIONS_FILE, "a") as f:
@@ -36,7 +39,7 @@ def clear_decisions() -> None:
         print(f"[storage] clear_decisions failed: {e}")
 
 
-def get_recent_decisions(limit: int = 100) -> list[dict]:
+def get_recent_decisions(limit: int = 200) -> list[dict]:
     if not os.path.exists(DECISIONS_FILE):
         return []
     try:

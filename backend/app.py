@@ -17,6 +17,7 @@ from flask_cors import CORS
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+from ai.clustering import MIN_WRONG_FOR_CLUSTERING, find_situation_clusters
 from ai.features import best_hand_rank
 from ai.teacher_policy import HandContext, teacher_policy
 from supabase_client import clear_decisions, get_recent_decisions, save_decision
@@ -76,15 +77,21 @@ def _hand_info(hero_hand: list, board: list, bucket: str):
     return label, reasoning
 
 
+_BET_LABELS = {
+    "bet_1": "Bet 1/3 pot",
+    "bet_2": "Bet 1/2 pot",
+    "bet_3": "Bet 3/4 pot",
+    "bet_4": "Bet pot",
+    "bet_5": "Bet 1.5x pot",
+}
+
+
 def _display_action(action: str, to_call: float) -> str:
     if action == "fold":
         return "Fold"
     if action == "call":
         return "Check" if to_call == 0 else f"Call ${to_call:.0f}"
-    if action.startswith("bet_"):
-        amt = action.split("_")[1]
-        return f"Bet ${amt}"
-    return action
+    return _BET_LABELS.get(action, action)
 
 
 def _verdict(user_action: str, recommended: str, to_call: float, user_prob: float) -> str:
@@ -107,11 +114,17 @@ def _verdict(user_action: str, recommended: str, to_call: float, user_prob: floa
     if not rec_bets and user_bets:
         return f"Too aggressive — {_display_action(recommended, to_call)} is safer. {confidence}"
     if rec_bets and user_bets:
-        rec_amt = int(recommended.split("_")[1])
-        usr_amt = int(user_action.split("_")[1])
-        if usr_amt > rec_amt:
-            return f"Bet sizing too large — ${rec_amt} is better here. {confidence}"
-        return f"Bet sizing too small — ${rec_amt} extracts more value. {confidence}"
+        rec_lvl = int(recommended.split("_")[1])
+        usr_lvl = int(user_action.split("_")[1])
+        diff = abs(usr_lvl - rec_lvl)
+        rec_label = _BET_LABELS.get(recommended, recommended)
+        if usr_lvl > rec_lvl:
+            if diff <= 1:
+                return f"Slightly aggressive sizing — {rec_label} is marginally better, but close. {confidence}"
+            return f"Bet sizing too large — {rec_label} is more likely to get called. {confidence}"
+        if diff <= 1:
+            return f"Slightly small sizing — {rec_label} extracts a bit more, but close. {confidence}"
+        return f"Bet sizing too small — {rec_label} extracts more value. {confidence}"
     return f"Close — coach slightly prefers {_display_action(recommended, to_call)}. {confidence}"
 
 
@@ -194,6 +207,10 @@ def _analyze_leaks(decisions: list[dict]) -> dict:
         if worst[1]["count"] >= 3:
             worst_street = worst[0]
 
+    wrong_count = total - correct
+    clusters = find_situation_clusters(decisions)
+    clusters_needed = max(0, MIN_WRONG_FOR_CLUSTERING - wrong_count)
+
     return {
         "enough_data": True,
         "decisions_tracked": total,
@@ -201,6 +218,8 @@ def _analyze_leaks(decisions: list[dict]) -> dict:
         "by_street": by_street,
         "leaks": leaks,
         "worst_street": worst_street,
+        "clusters": clusters,
+        "clusters_needed": clusters_needed,
     }
 
 
@@ -229,13 +248,19 @@ def evaluate():
     bucket = result["bucket"]
     probs = result["probs"]
 
-    user_prob = probs.get(user_action, 0.0)
+    # Use grouped probability so approval matches the bar chart
+    if user_action == "fold":
+        user_prob = probs.get("fold", 0.0)
+    elif user_action == "call":
+        user_prob = probs.get("call", 0.0)
+    else:
+        user_prob = sum(v for k, v in probs.items() if k.startswith("bet_"))
     hand_strength, reasoning = _hand_info(hero_hand, board, bucket)
     correct = user_action == recommended
 
     threading.Thread(
         target=save_decision,
-        args=(street, user_action, recommended, correct, pot, to_call, hand_strength, style),
+        args=(street, user_action, recommended, correct, pot, to_call, hand_strength, style, hero_hand, board),
         daemon=True,
     ).start()
 

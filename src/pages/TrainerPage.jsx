@@ -5,13 +5,26 @@ import { bestHandScore, compareScores, handName } from '../utils/handEvaluator.j
 
 const STREETS = ['preflop', 'flop', 'turn', 'river'];
 const OPPONENT_STYLES = ['aggressive', 'moderate', 'tight'];
-const BET_ACTIONS = [
-  { id: 'bet_1', label: '$1' },
-  { id: 'bet_2', label: '$2' },
-  { id: 'bet_3', label: '$3' },
-  { id: 'bet_4', label: '$4' },
-  { id: 'bet_5', label: '$5' },
+const BET_FRACTIONS = [
+  { id: 'bet_1', fraction: 1 / 3, shortLabel: '1/3 pot' },
+  { id: 'bet_2', fraction: 1 / 2, shortLabel: '1/2 pot' },
+  { id: 'bet_3', fraction: 3 / 4, shortLabel: '3/4 pot' },
+  { id: 'bet_4', fraction: 1,     shortLabel: 'Pot' },
+  { id: 'bet_5', fraction: 1.5,   shortLabel: '1.5x pot' },
 ];
+
+function betAmountForId(id, pot) {
+  const entry = BET_FRACTIONS.find((b) => b.id === id);
+  if (!entry) return 0;
+  return Math.max(1, Math.round(pot * entry.fraction));
+}
+
+function getBetActions(pot) {
+  return BET_FRACTIONS.map(({ id, fraction, shortLabel }) => {
+    const amt = Math.max(1, Math.round(pot * fraction));
+    return { id, label: `${shortLabel} ($${amt})`, amount: amt };
+  });
+}
 
 const SB = 1;
 const BB = 2;
@@ -91,8 +104,8 @@ function createBotHand(startingStack = 100, opponentStyle = 'aggressive') {
   };
 }
 
-function parseBetAmount(actionId) {
-  if (actionId.startsWith('bet_')) return Number(actionId.split('_')[1] || 0);
+function parseBetAmount(actionId, pot) {
+  if (actionId.startsWith('bet_')) return betAmountForId(actionId, pot);
   return 0;
 }
 
@@ -277,7 +290,7 @@ export default function TrainerPage({ onHandGraded }) {
       }
 
       // Phase 1: normal user action
-      const userAmount = actionId === 'call' ? next.toCall : parseBetAmount(actionId);
+      const userAmount = actionId === 'call' ? next.toCall : parseBetAmount(actionId, next.pot);
       const userPutIn = Math.min(userAmount, next.userStack);
       next.userStack -= userPutIn;
       next.userCommitted += userPutIn;
@@ -285,13 +298,15 @@ export default function TrainerPage({ onHandGraded }) {
       next.log.push(`User ${userPutIn === 0 ? 'checks' : actionId === 'call' ? `calls $${userPutIn}` : `bets $${userPutIn}`}.`);
 
       const userChecked = userPutIn === 0;
+      // Preflop: bot already posted BB; if user just called (no raise), bot checks back
+      const preflopBotAlreadyIn = next.streetIndex === 0 && actionId === 'call';
       let needsUserResponse = false;
       let botBetAmount = 0;
 
       for (const bot of next.bots) {
         if (bot.folded) continue;
 
-        let botAction = chooseBotAction(bot.style);
+        let botAction = preflopBotAlreadyIn ? 'call' : chooseBotAction(bot.style);
 
         // If user bet, bot can only call or fold — no re-raises
         if (!userChecked && botAction.startsWith('bet_')) {
@@ -302,14 +317,14 @@ export default function TrainerPage({ onHandGraded }) {
           bot.folded = true;
           next.log.push(`${bot.name} folds.`);
         } else if (botAction === 'call') {
-          // Call means match what user put in; checking is call with $0
-          const callAmt = Math.min(userPutIn, bot.stack);
+          // Preflop BB-check costs $0; otherwise match what user put in
+          const callAmt = preflopBotAlreadyIn ? 0 : Math.min(userPutIn, bot.stack);
           bot.stack -= callAmt;
           next.pot += callAmt;
           next.log.push(`${bot.name} ${callAmt === 0 ? 'checks' : `calls $${callAmt}`}.`);
         } else {
           // Bot bets — only valid when user checked
-          const betAmt = parseBetAmount(botAction);
+          const betAmt = parseBetAmount(botAction, next.pot);
           const botPutIn = Math.min(betAmt, bot.stack);
           if (botPutIn > 0) {
             bot.stack -= botPutIn;
@@ -371,7 +386,7 @@ export default function TrainerPage({ onHandGraded }) {
   const callLabel = botHand.toCall > 0 ? `Call $${botHand.toCall}` : 'Check';
   const availableBets = botHand.awaitingUserResponse
     ? []
-    : BET_ACTIONS.filter(({ id }) => parseBetAmount(id) <= botHand.userStack);
+    : getBetActions(botHand.pot).filter(({ amount }) => amount <= botHand.userStack);
   const actions = [{ id: 'fold', label: 'Fold' }, { id: 'call', label: callLabel }, ...availableBets];
 
   const botHandsForTable = botHand.bots.map((b) => ({
@@ -587,6 +602,24 @@ export default function TrainerPage({ onHandGraded }) {
                   </span>
                 ))}
               </div>
+
+              {leaks.clusters ? (
+                <div className="pt-1">
+                  <p className="text-xs text-violet-400 font-medium mb-2">Situation clusters — where you go wrong:</p>
+                  <div className="space-y-2">
+                    {leaks.clusters.map((cluster, i) => (
+                      <div key={i} className="rounded-lg border border-violet-800/50 bg-violet-900/20 px-3 py-2">
+                        <p className="text-slate-300 text-xs leading-relaxed">{cluster.description}</p>
+                        <p className="text-violet-500 text-xs mt-1">{cluster.count} decision{cluster.count !== 1 ? 's' : ''} in this pattern</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : leaks.clusters_needed > 0 ? (
+                <p className="text-xs text-violet-500">
+                  Make {leaks.clusters_needed} more mistake{leaks.clusters_needed !== 1 ? 's' : ''} to unlock situation cluster analysis.
+                </p>
+              ) : null}
             </div>
           )}
         </section>

@@ -62,7 +62,9 @@ def _preflop_strength_bucket(hole_cards: List[str]) -> str:
 
     if pair and high >= 11:
         return "premium"
-    if {r1, r2} in [{"A", "K"}, {"A", "Q"}, {"K", "Q"}] and suited:
+    if {r1, r2} >= {"A", "K"} or {r1, r2} >= {"A", "Q"}:
+        return "premium"  # AKo/AKs, AQo/AQs
+    if {r1, r2} == {"K", "Q"} and suited:
         return "premium"
     if pair and high >= 8:
         return "strong"
@@ -70,8 +72,8 @@ def _preflop_strength_bucket(hole_cards: List[str]) -> str:
         return "strong"
     if suited and gap <= 2 and high >= 10:
         return "playable"
-    if pair and high >= 5:
-        return "playable"
+    if pair:
+        return "playable"  # all pairs including 22-44
     return "weak"
 
 
@@ -141,21 +143,21 @@ def _apply_style_adjustment(probs: Dict[str, float], style: str) -> Dict[str, fl
     adjusted = dict(probs)
 
     if style == "aggressive":
-        adjusted["fold"] = adjusted.get("fold", 0.0) * 0.65
-        adjusted["call"] = adjusted.get("call", 0.0) * 0.85
+        # vs aggressive bot: they bluff often, so trap more; push thin value bets
+        adjusted["fold"] = adjusted.get("fold", 0.0) * 0.40
+        adjusted["call"] = adjusted.get("call", 0.0) * 0.75
         for bet_action in ("bet_2", "bet_3", "bet_4", "bet_5"):
-            adjusted[bet_action] = adjusted.get(bet_action, 0.0) * 1.25
-        adjusted["bet_1"] = adjusted.get("bet_1", 0.0) * 1.10
+            adjusted[bet_action] = adjusted.get(bet_action, 0.0) * 1.60
+        adjusted["bet_1"] = adjusted.get("bet_1", 0.0) * 1.40
     elif style == "tight":
-        adjusted["fold"] = adjusted.get("fold", 0.0) * 1.35
-        adjusted["call"] = adjusted.get("call", 0.0) * 1.10
+        # vs tight bot: they rarely bluff, so fold more to bets; check marginals
+        adjusted["fold"] = adjusted.get("fold", 0.0) * 1.60
+        adjusted["call"] = adjusted.get("call", 0.0) * 1.20
         for bet_action in ("bet_3", "bet_4", "bet_5"):
-            adjusted[bet_action] = adjusted.get(bet_action, 0.0) * 0.70
-        adjusted["bet_1"] = adjusted.get("bet_1", 0.0) * 0.95
-        adjusted["bet_2"] = adjusted.get("bet_2", 0.0) * 0.85
-    else:  # moderate
-        adjusted["fold"] = adjusted.get("fold", 0.0) * 1.00
-        adjusted["call"] = adjusted.get("call", 0.0) * 1.00
+            adjusted[bet_action] = adjusted.get(bet_action, 0.0) * 0.40
+        adjusted["bet_1"] = adjusted.get("bet_1", 0.0) * 0.80
+        adjusted["bet_2"] = adjusted.get("bet_2", 0.0) * 0.60
+    # moderate: no adjustment
 
     return adjusted
 
@@ -168,7 +170,7 @@ def _apply_price_adjustment(probs: Dict[str, float], to_call: float, pot_size: f
     if price > 0.5:
         adjusted["fold"] = adjusted.get("fold", 0.0) * 1.25
         adjusted["call"] = adjusted.get("call", 0.0) * 0.85
-    elif price < 0.2:
+    elif price < 0.35:
         adjusted["call"] = adjusted.get("call", 0.0) * 1.10
         adjusted["fold"] = adjusted.get("fold", 0.0) * 0.90
     return adjusted

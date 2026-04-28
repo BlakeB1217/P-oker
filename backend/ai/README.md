@@ -1,38 +1,11 @@
-# Teacher Policy Sandbox
+# AI / Coaching Logic
 
-This directory is isolated from your app runtime and is meant for experimenting with
-"AI-ish" bot training flows.
+Rule-based teacher policy and ML-powered tendency analysis.
 
 ## Files
 
-- `teacher_policy.py` - rule-based teacher that outputs:
-  - sampled action (`fold`, `call`, `bet_1`..`bet_5`)
-  - full probability distribution over actions
-  - internal strength bucket used for the decision
-- `generate_teacher_dataset.py` - synthetic dataset generator (JSONL).
+- `teacher_policy.py` — maps hand state to a recommended action and probability distribution. Buckets hands by strength (premium/strong/playable/weak preflop; 0–8 rank postflop), applies style adjustments for aggressive/moderate/tight opponents, and uses a group-aware argmax so bet actions aren't split-voted by call.
 
-## Why this exists
+- `features.py` — converts raw hand state (hole cards, board, street, pot, to_call) into a 14-element numerical feature vector used by the clustering module.
 
-You asked for different playstyles (aggressive, moderate, tight) and concern about trainsets.
-This creates your trainset by simulation instead of needing external labeled data.
-
-## Generate a dataset
-
-From repo root:
-
-```bash
-python backend/ai/generate_teacher_dataset.py --num-samples 5000 --output backend/ai/data/teacher_examples.jsonl
-```
-
-Each row contains:
-
-- `state` (hole cards, board cards, street, pot size, to_call, style, position)
-- `target_action` (teacher sampled action)
-- `target_probs` (soft labels useful for distillation)
-- `teacher_bucket` (debug signal)
-
-## Next step after this
-
-Train a small classifier (logistic regression or tiny MLP) to predict `target_action`
-from `state` features. Keep `target_probs` if you want to do soft-label training later.
-
+- `clustering.py` — pure Python k-means that groups a player's wrong decisions into recurring situation patterns. Requires 15+ wrong decisions to run. Returns human-readable cluster descriptions (e.g. "On the flop with one pair, you tend to check when betting is better.").

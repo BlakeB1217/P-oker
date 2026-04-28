@@ -1,48 +1,40 @@
-# Poker Strategy Trainer – Flask backend
+# Poker Strategy Trainer – Flask Backend
 
-Python/Flask API that serves scenarios and evaluates actions. Game data is stored in **Supabase**.
+Python/Flask API that evaluates player actions and tracks decision history.
 
 ## Setup
 
 1. **Python env** (from project root):
    ```bash
    python -m venv .venv
-   source .venv/bin/activate   # or .venv\Scripts\activate on Windows
+   source .venv/bin/activate
    pip install -r requirements.txt
    ```
 
-2. **Supabase**
-   - Create a project at [supabase.com](https://supabase.com).
-   - In the SQL Editor, run the contents of `backend/supabase_schema.sql` to create `scenarios` and `attempts` (and the optional `get_random_scenario()` function).
-   - In Project Settings → API: copy **Project URL** and **anon public** key.
-
-3. **Environment**
-   - Copy `.env.example` to `.env` in the **project root**.
-   - Set `SUPABASE_URL` and `SUPABASE_ANON_KEY` in `.env`.
-
-## Run
-
-From the **backend** directory (so imports resolve):
-
-```bash
-cd backend
-flask --app app run
-```
-
-Default: http://127.0.0.1:5000. The Vite frontend proxies `/scenario` and `/submit-action` to this port.
-
-**Without Supabase:** If `.env` has no Supabase keys, the app still runs and returns stub scenario/feedback so you can develop the UI.
+2. **Run** (from the `backend` directory):
+   ```bash
+   cd backend
+   python app.py
+   ```
+   Runs on http://127.0.0.1:5001. The Vite frontend proxies `/api/*` to this port.
 
 ## Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/scenario` | One scenario (from Supabase or stub). Response includes `scenario_id`. |
-| POST | `/submit-action` | Body: `{ hand_state, user_action, scenario_id }`. Returns feedback; optionally logs to `attempts`. |
+| POST | `/api/evaluate` | Evaluate a user action. Body: `{ hero_hand, board, street, pot, to_call, user_action, style }`. Returns coaching feedback. |
+| GET | `/api/leaks` | Analyze stored decisions and return tendency/leak report. |
+| GET | `/api/decisions/count` | Total decisions tracked this session. |
+| DELETE | `/api/decisions` | Clear decision history. |
 
-## Supabase tables
+## Decision Storage
 
-- **scenarios** – One row per training hand (position, hero_hand, board, pot, stack, street, facing_action) plus correct answer (recommended_action, reasoning, concept, ev_difference).
-- **attempts** – Optional log of each user submission (scenario_id, user_action, recommended_action, correct).
+Decisions are stored locally in `backend/decisions.jsonl`. Each line is a JSON record containing street, user action, recommended action, correctness, pot size, hand strength, and hole cards. This file is gitignored and accumulates across sessions until cleared via the API.
 
-See `supabase_schema.sql` for full DDL and example insert.
+## Structure
+
+- `app.py` — Flask app and API endpoints
+- `supabase_client.py` — local file storage (read/write decisions.jsonl)
+- `ai/teacher_policy.py` — rule-based coaching policy
+- `ai/features.py` — hand state feature extraction
+- `ai/clustering.py` — k-means clustering for leak detection

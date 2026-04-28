@@ -1,5 +1,6 @@
 #!/bin/bash
 set -e
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Install frontend deps if needed
 if [ ! -d "node_modules" ]; then
@@ -19,9 +20,8 @@ source .venv/bin/activate
 pip install -q -r requirements.txt
 
 echo "Starting backend..."
-cd backend && python app.py &
+(cd backend && python app.py) &
 BACKEND_PID=$!
-cd ..
 
 echo "Starting frontend..."
 npm run dev &

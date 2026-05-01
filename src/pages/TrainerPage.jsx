@@ -398,8 +398,8 @@ export default function TrainerPage({ onHandGraded }) {
   }));
 
   return (
-    <main className="flex-1 max-w-3xl w-full mx-auto px-4 py-8 sm:py-10 space-y-8">
-      <div className="text-center sm:text-left">
+    <main className="flex-1 max-w-6xl w-full mx-auto px-4 py-8 sm:py-10">
+      <div className="text-center sm:text-left mb-8">
         <h1 className="font-display text-2xl sm:text-3xl font-bold text-white tracking-tight">
           Bot Table
         </h1>
@@ -408,6 +408,8 @@ export default function TrainerPage({ onHandGraded }) {
         </p>
       </div>
 
+      <div className="flex gap-6 items-start">
+      <div className="flex-1 min-w-0 space-y-6">
       <>
         <section className="flex flex-wrap items-center gap-2" aria-label="Opponent selector">
           <span className="text-sm text-slate-300 mr-1">Opponent:</span>
@@ -624,9 +626,14 @@ export default function TrainerPage({ onHandGraded }) {
           )}
         </section>
 
+      </>
+      </div>
+
+      {/* Hand log — right sidebar */}
+      <div className="w-64 shrink-0 sticky top-4">
         <section className="rounded-xl border border-slate-700 bg-slate-900/70 p-4" aria-label="Hand action log">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300 mb-2">Hand log</h2>
-          <div className="space-y-1 text-sm text-slate-300 max-h-56 overflow-auto">
+          <div className="space-y-1 text-sm text-slate-300 max-h-[70vh] overflow-auto">
             {botHand.log.map((line, idx) => (
               <p key={`${line}-${idx}`}>{line}</p>
             ))}
@@ -635,7 +642,8 @@ export default function TrainerPage({ onHandGraded }) {
             <p className="mt-3 text-emerald-300 font-medium">Result: {botHand.winner}</p>
           )}
         </section>
-      </>
+      </div>
+    </div>
     </main>
   );
 }
